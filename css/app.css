@@ -1,0 +1,14 @@
+.bold {
+    font-weight: bold;
+}
+
+table {
+    border: 1px solid black;
+    border-collapse: collapse;
+    width: 700px;
+}
+
+td {
+    padding: 10px;
+     border: 1px solid black;
+}
